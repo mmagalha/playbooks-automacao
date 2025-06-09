@@ -1,0 +1,13 @@
+# execucao_final.yml
+- name: Execução após aprovação
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Confirmar variáveis recebidas
+      debug:
+        var: dados_coletados
+
+    - name: Ação final (exemplo)
+      debug:
+        msg: "Executando tarefa com base na aprovação."
+  
