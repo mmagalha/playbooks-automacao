@@ -1,0 +1,131 @@
+- name: Setup completo de projeto, inventário, JTs e workflow
+  hosts: localhost
+  collections:
+    - awx.awx
+  vars:
+    tower_host: lookup(env, 'TOWER_HOST', default='https://localhost:8043')
+    tower_username: lookup(env, 'TOWER_ADMIN_USER')
+    tower_password: lookup(env, 'TOWER_ADMIN_PASSWORD')
+    validate_certs: false
+
+    organization_name: "Default"
+    project_name: "Projeto Automação"
+    project_scm_url: "https://github.com/mmagalha/playbooks-automacao.git"
+    inventory_name: "Inventário Padrão"
+    credential_name: "Credencial Localhost"
+
+    jt_coleta_name: "JT Coleta"
+    jt_execucao_name: "JT Execução Final"
+    jt_erro_name: "JT Notificação"
+    workflow_name: "Workflow de Coleta com Aprovação"
+
+  tasks:
+
+    - name: Garantir organização
+      tower_organization_info:
+        name: "{{ organization_name }}"
+      register: org
+
+    - name: Garantir credencial para localhost (ajustar conforme seu ambiente)
+      tower_credential_info:
+        name: "{{ credential_name }}"
+      register: cred
+
+    - name: Criar inventário se não existir
+      tower_inventory:
+        name: "{{ inventory_name }}"
+        organization: "{{ org.organization.id }}"
+        state: present
+      register: inventory
+
+    - name: Criar projeto (com Git)
+      tower_project:
+        name: "{{ project_name }}"
+        organization: "{{ org.organization.id }}"
+        scm_type: git
+        scm_url: "{{ project_scm_url }}"
+        scm_update_on_launch: true
+        state: present
+      register: projeto
+
+    - name: Criar JT Coleta
+      tower_job_template:
+        name: "{{ jt_coleta_name }}"
+        project: "{{ projeto.id }}"
+        playbook: "coleta.yml"
+        inventory: "{{ inventory.id }}"
+        credential: "{{ cred.credential.id }}"
+        state: present
+
+    - name: Criar JT Execução Final
+      tower_job_template:
+        name: "{{ jt_execucao_name }}"
+        project: "{{ projeto.id }}"
+        playbook: "execucao_final.yml"
+        inventory: "{{ inventory.id }}"
+        credential: "{{ cred.credential.id }}"
+        state: present
+
+    - name: Criar JT Notificação
+      tower_job_template:
+        name: "{{ jt_erro_name }}"
+        project: "{{ projeto.id }}"
+        playbook: "notificacao_falha.yml"
+        inventory: "{{ inventory.id }}"
+        credential: "{{ cred.credential.id }}"
+        state: present
+
+    - name: Criar Workflow Job Template
+      tower_workflow_job_template:
+        name: "{{ workflow_name }}"
+        organization: "{{ org.organization.id }}"
+        inventory: "{{ inventory.id }}"
+        state: present
+      register: wjt
+
+    - name: Obter JTs criados
+      tower_job_template_info:
+        name: "{{ jt_coleta_name }}"
+      register: jt_coleta
+
+    - name: Obter JTs Execução
+      tower_job_template_info:
+        name: "{{ jt_execucao_name }}"
+      register: jt_execucao
+
+    - name: Obter JTs Notificação
+      tower_job_template_info:
+        name: "{{ jt_erro_name }}"
+      register: jt_erro
+
+    - name: Adicionar nó de coleta
+      tower_workflow_node:
+        workflow_job_template: "{{ wjt.id }}"
+        unified_job_template: "{{ jt_coleta.job_templates[0].id }}"
+        identifier: coleta
+      register: node_coleta
+
+    - name: Adicionar nó de aprovação
+      tower_workflow_node:
+        workflow_job_template: "{{ wjt.id }}"
+        identifier: aprovacao
+        type: approval
+        name: "Aprovar Execução"
+        description: "Dados coletados: {{ workflow.vars.dados_coletados }}"
+        related:
+          success_nodes: [ "{{ node_coleta.id }}" ]
+      register: node_aprovacao
+
+    - name: Adicionar nó de execução final
+      tower_workflow_node:
+        workflow_job_template: "{{ wjt.id }}"
+        unified_job_template: "{{ jt_execucao.job_templates[0].id }}"
+        related:
+          success_nodes: [ "{{ node_aprovacao.id }}" ]
+
+    - name: Adicionar nó de notificação (falha da coleta)
+      tower_workflow_node:
+        workflow_job_template: "{{ wjt.id }}"
+        unified_job_template: "{{ jt_erro.job_templates[0].id }}"
+        related:
+          failure_nodes: [ "{{ node_coleta.id }}" ]

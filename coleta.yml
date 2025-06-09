@@ -1,0 +1,17 @@
+# coleta.yml
+- name: Coleta de informações via API
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Coletar dados da API
+      uri:
+        url: "https://api.exemplo.com/status"
+        method: GET
+        return_content: yes
+      register: api_response
+      failed_when: api_response.status != 200
+
+    - name: Salvar conteúdo para aprovação
+      set_stats:
+        data:
+          dados_coletados: "{{ api_response.content | from_json | to_nice_json }}"
